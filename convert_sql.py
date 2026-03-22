@@ -92,53 +92,55 @@ def load_zipcode_map(path: Path) -> Dict[str, Dict[str, str]]:
 
 
 def split_sql_statements(text: str) -> List[str]:
+    """Split SQL text into individual statements, respecting quoted strings."""
     statements = []
-    current = []
+    current = io.StringIO()
     in_string = False
     i = 0
     while i < len(text):
         ch = text[i]
-        current.append(ch)
+        current.write(ch)
         if ch == "'":
             if in_string and i + 1 < len(text) and text[i + 1] == "'":
-                current.append(text[i + 1])
+                current.write(text[i + 1])
                 i += 1
             else:
                 in_string = not in_string
         elif ch == ";" and not in_string:
-            statement = "".join(current).strip()
+            statement = current.getvalue().strip()
             if statement:
                 statements.append(statement)
-            current = []
+            current = io.StringIO()
         i += 1
-    tail = "".join(current).strip()
+    tail = current.getvalue().strip()
     if tail:
         statements.append(tail)
     return statements
 
 
 def parse_value_tokens(text: str) -> List[str]:
+    """Parse comma-separated tokens, respecting quoted strings."""
     tokens = []
-    current = []
+    current = io.StringIO()
     in_string = False
     i = 0
     while i < len(text):
         ch = text[i]
         if ch == "'":
-            current.append(ch)
+            current.write(ch)
             if in_string and i + 1 < len(text) and text[i + 1] == "'":
-                current.append(text[i + 1])
+                current.write(text[i + 1])
                 i += 1
             else:
                 in_string = not in_string
         elif ch == "," and not in_string:
-            tokens.append("".join(current).strip())
-            current = []
+            tokens.append(current.getvalue().strip())
+            current = io.StringIO()
         else:
-            current.append(ch)
+            current.write(ch)
         i += 1
-    if current or text.endswith(","):
-        tokens.append("".join(current).strip())
+    if current.tell() > 0 or text.endswith(","):
+        tokens.append(current.getvalue().strip())
     return tokens
 
 
@@ -321,10 +323,9 @@ def process(sql_path: Path, zipcode_path: Path, output_dir: Path) -> int:
 
             # Validate Big5 encoding per record so one bad row does not stop the batch.
             sql_line.encode("big5")
-            csv_buffer = io.StringIO()
-            csv_writer = csv.writer(csv_buffer)
-            csv_writer.writerow(["" if record[column] is None else record[column] for column in CSV_OUTPUT_COLUMNS])
-            csv_buffer.getvalue().encode("big5")
+            # Pre-build CSV row for validation
+            csv_row = ["" if record[column] is None else record[column] for column in CSV_OUTPUT_COLUMNS]
+            ",".join(csv_row).encode("big5")  # Quick Big5 validation without CSV writer overhead
 
             sql_lines.append(sql_line + "\n")
             csv_rows.append(record)
