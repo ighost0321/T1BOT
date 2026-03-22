@@ -1,0 +1,33 @@
+cat > .gitignore << 'EOF'
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Logs
+*.log
+
+# Node
+node_modules/
+
+# Java
+target/
+*.class
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Env / secrets
+.env
+*.pem
+*.txt
+*.csv
+*.bak
+*.bakup
+EOF
