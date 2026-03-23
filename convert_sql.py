@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 
 SQL_OUTPUT_COLUMNS = [
     "ACCTNO",
+    "UID",
     "PWDHASHCODE",
     "FORCEUPD",
     "LOCKNUM",
@@ -28,11 +29,30 @@ SQL_OUTPUT_COLUMNS = [
     "GENDER",
 ]
 
-CSV_OUTPUT_COLUMNS = SQL_OUTPUT_COLUMNS + ["COMENTS"]
+CSV_OUTPUT_COLUMNS = [
+    "ACCTNO",
+    "PWDHASHCODE",
+    "FORCEUPD",
+    "LOCKNUM",
+    "USERNAME",
+    "BIRTHDATE",
+    "EMAIL",
+    "MOBILE",
+    "ZIPCODE",
+    "ADDRESS1",
+    "ADDRESS2",
+    "ADDRESS3",
+    "AGREESALES",
+    "ACCT_STATE",
+    "CRT_DATE",
+    "UPD_DATE",
+    "GENDER",
+    "COMENTS",
+]
 
 INSERT_PREFIX = (
     "INSERT INTO account_info "
-    "(ACCTNO,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,"
+    "(ACCTNO,UID,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,"
     "ZIPCODE,ADDRESS1,ADDRESS2,ADDRESS3,AGREESALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER)"
 )
 
@@ -200,6 +220,7 @@ def transform_record(
     statement: str,
 ) -> Optional[Dict[str, Optional[str]]]:
     record = dict(zip(source_columns, source_values))
+    zipcode_token = record.get("ZIPCODE")
 
     required = [
         "ACCTNO",
@@ -226,11 +247,15 @@ def transform_record(
     for column in SQL_OUTPUT_COLUMNS:
         if column in ("ADDRESS1", "ADDRESS2"):
             continue
+        if column == "UID":
+            output[column] = "newID()"
+            continue
         raw = record.get(column)
         output[column] = decode_sql_value(raw) if raw is not None else ""
 
-    zipcode = normalize_zipcode(output["ZIPCODE"])
+    zipcode = normalize_zipcode(output.get("ZIPCODE"))
     output["ZIPCODE"] = zipcode
+    output["_ZIPCODE_TOKEN"] = None if is_sql_null(zipcode_token or "") else (zipcode_token.strip() if zipcode_token is not None else None)
     if zipcode is None:
         output["ADDRESS1"] = ""
         output["ADDRESS2"] = ""
@@ -259,15 +284,13 @@ def build_sql_line(record: Dict[str, Optional[str]]) -> str:
     tokens = []
     for column in SQL_OUTPUT_COLUMNS:
         value = record.get(column)
-        if column == "LOCKNUM":
+        if column == "UID":
+            tokens.append(value or "newID()")
+        elif column == "LOCKNUM":
             tokens.append(encode_sql_value(value, quoted=False))
         elif column == "ZIPCODE":
-            if value is None:
-                tokens.append("null")
-            elif value.isdigit():
-                tokens.append(value)
-            else:
-                tokens.append(encode_sql_value(value))
+            zipcode_token = record.get("_ZIPCODE_TOKEN")
+            tokens.append("null" if zipcode_token is None else zipcode_token)
         else:
             tokens.append(encode_sql_value(value))
     return f"{INSERT_PREFIX} VALUES ({','.join(tokens)});"
