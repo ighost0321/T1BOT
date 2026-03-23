@@ -90,7 +90,7 @@ INSERT INTO account_info (ACCTNO,UID,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTH
 
 CSV 欄位順序必須與下列欄位完全一致：
 
-`ACCTNO,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,ZIPCODE,ADDRESS1,ADDRESS2,ADDRESS3,AGREESALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER,COMENTS`
+`ACCTNO,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,ZIPCODE,ZIPCODE_ORIGIN,ADDRESS1,ADDRESS2,ADDRESS3,ADDRESS3_ORIGIN,AGREESALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER,COMENTS`
 
 ### 8.2 內容來源
 
@@ -102,8 +102,17 @@ CSV 欄位順序必須與下列欄位完全一致：
 ### 9.1 ZIPCODE 為 null
 
 - 若 `ZIPCODE` 為 SQL `null` 或 `NULL`，則：
-  - `ADDRESS1` 設為空字串 `''`
-  - `ADDRESS2` 設為空字串 `''`
+  - 抓取ADDRESS3第一至第三字元與zipcode.json city比對和第四至第六字元與zipcode.json name比對：
+  - TRUE:
+    - COPY city of zipcode.json to `ADDRESS1`
+    - COPY name of zipcode.json to `ADDRESS2`
+    - COPY zipCode of zipcode.json to `ZIPCODE`
+    - COPY `null` to `ZIPCODE_ORGIN`
+  - FALSE:
+    - `ADDRESS1` 設為空字串 `''`
+    - `ADDRESS2` 設為空字串 `''`
+    - COPY `null` to `ZIPCODE_ORGIN`
+  - COPY `ADDRESS3` to `ADDRESS3_ORGIN`
   - CSV COMENTS欄位新增文字"客戶資料無zipcode"
 
 ### 9.2 ZIPCODE 不為 null

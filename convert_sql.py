@@ -39,9 +39,11 @@ CSV_OUTPUT_COLUMNS = [
     "EMAIL",
     "MOBILE",
     "ZIPCODE",
+    "ZIPCODE_ORIGIN",
     "ADDRESS1",
     "ADDRESS2",
     "ADDRESS3",
+    "ADDRESS3_ORIGIN",
     "AGREESALES",
     "ACCT_STATE",
     "CRT_DATE",
@@ -221,6 +223,7 @@ def transform_record(
 ) -> Optional[Dict[str, Optional[str]]]:
     record = dict(zip(source_columns, source_values))
     zipcode_token = record.get("ZIPCODE")
+    address3_token = record.get("ADDRESS3")
 
     required = [
         "ACCTNO",
@@ -255,10 +258,32 @@ def transform_record(
 
     zipcode = normalize_zipcode(output.get("ZIPCODE"))
     output["ZIPCODE"] = zipcode
+    output["ZIPCODE_ORIGIN"] = (
+        "null" if is_sql_null(zipcode_token or "") else (decode_sql_value(zipcode_token) if zipcode_token is not None else "")
+    )
+    output["ADDRESS3_ORIGIN"] = decode_sql_value(address3_token) if address3_token is not None else ""
     output["_ZIPCODE_TOKEN"] = None if is_sql_null(zipcode_token or "") else (zipcode_token.strip() if zipcode_token is not None else None)
     if zipcode is None:
-        output["ADDRESS1"] = ""
-        output["ADDRESS2"] = ""
+        matched = None
+        address3 = output.get("ADDRESS3") or ""
+        if len(address3) >= 6:
+            city_part = address3[:3]
+            name_part = address3[3:6]
+            for zip_code, area in zipcode_map.items():
+                if area.get("city") == city_part and area.get("name") == name_part:
+                    matched = (zip_code, area)
+                    break
+        if matched:
+            zip_code, area = matched
+            output["ADDRESS1"] = area["city"]
+            output["ADDRESS2"] = area["name"]
+            output["ZIPCODE"] = zip_code
+            output["_ZIPCODE_TOKEN"] = encode_sql_value(zip_code)
+            output["ZIPCODE_ORIGIN"] = "null"
+        else:
+            output["ADDRESS1"] = ""
+            output["ADDRESS2"] = ""
+            output["ZIPCODE_ORIGIN"] = "null"
         output["COMENTS"] = "客戶資料無zipcode"
     else:
         area = zipcode_map.get(zipcode)
