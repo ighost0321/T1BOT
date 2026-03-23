@@ -19,10 +19,10 @@ SQL_OUTPUT_COLUMNS = [
     "EMAIL",
     "MOBILE",
     "ZIPCODE",
-    "ADDRESS1",
-    "ADDRESS2",
-    "ADDRESS3",
-    "AGREESALES",
+    "ADDRESS_1",
+    "ADDRESS_2",
+    "ADDRESS_3",
+    "AGREE_SALES",
     "ACCT_STATE",
     "CRT_DATE",
     "UPD_DATE",
@@ -40,11 +40,11 @@ CSV_OUTPUT_COLUMNS = [
     "MOBILE",
     "ZIPCODE",
     "ZIPCODE_ORIGIN",
-    "ADDRESS1",
-    "ADDRESS2",
-    "ADDRESS3",
-    "ADDRESS3_ORIGIN",
-    "AGREESALES",
+    "ADDRESS_1",
+    "ADDRESS_2",
+    "ADDRESS_3",
+    "ADDRESS_3_ORIGIN",
+    "AGREE_SALES",
     "ACCT_STATE",
     "CRT_DATE",
     "UPD_DATE",
@@ -55,7 +55,7 @@ CSV_OUTPUT_COLUMNS = [
 INSERT_PREFIX = (
     "INSERT INTO account_info "
     "(ACCTNO,UID,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,"
-    "ZIPCODE,ADDRESS1,ADDRESS2,ADDRESS3,AGREESALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER)"
+    "ZIPCODE,ADDRESS_1,ADDRESS_2,ADDRESS_3,AGREE_SALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER)"
 )
 
 INSERT_PATTERN = re.compile(
@@ -85,6 +85,21 @@ class Logger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(line)
+
+
+ALIASES = {
+    "ADDRESS_1": ["ADDRESS_1", "ADDRESS1"],
+    "ADDRESS_2": ["ADDRESS_2", "ADDRESS2"],
+    "ADDRESS_3": ["ADDRESS_3", "ADDRESS3"],
+    "AGREE_SALES": ["AGREE_SALES", "AGREESALES"],
+}
+
+
+def get_source_value(record: Dict[str, str], column: str) -> Optional[str]:
+    for name in ALIASES.get(column, [column]):
+        if name in record:
+            return record[name]
+    return None
 
 
 def read_text_with_fallback(path: Path) -> Tuple[str, str]:
@@ -207,10 +222,15 @@ def normalize_zipcode(value: Optional[str]) -> Optional[str]:
     return value.strip()
 
 
-def transform_gender(value: Optional[str]) -> str:
-    if value is not None and value.strip().upper() == "M":
-        return "0"
-    return "1"
+def transform_gender(value: Optional[str]) -> Tuple[str, bool]:
+    if value is None:
+        return "0", False
+    text = value.strip().upper()
+    if text == "M":
+        return "1", False
+    if text == "F" or text == "":
+        return "0", False
+    return "9", True
 
 
 def transform_record(
@@ -223,7 +243,7 @@ def transform_record(
 ) -> Optional[Dict[str, Optional[str]]]:
     record = dict(zip(source_columns, source_values))
     zipcode_token = record.get("ZIPCODE")
-    address3_token = record.get("ADDRESS3")
+    address3_token = get_source_value(record, "ADDRESS_3")
 
     required = [
         "ACCTNO",
@@ -235,25 +255,25 @@ def transform_record(
         "EMAIL",
         "MOBILE",
         "ZIPCODE",
-        "ADDRESS3",
-        "AGREESALES",
+        "ADDRESS_3",
+        "AGREE_SALES",
         "ACCT_STATE",
         "CRT_DATE",
         "UPD_DATE",
         "GENDER",
     ]
-    missing = [name for name in required if name not in record]
+    missing = [name for name in required if get_source_value(record, name) is None]
     if missing:
         raise ProcessingError("missing required columns: " + ",".join(missing))
 
     output = {column: "" for column in CSV_OUTPUT_COLUMNS}
     for column in SQL_OUTPUT_COLUMNS:
-        if column in ("ADDRESS1", "ADDRESS2"):
+        if column in ("ADDRESS_1", "ADDRESS_2"):
             continue
         if column == "UID":
             output[column] = "newID()"
             continue
-        raw = record.get(column)
+        raw = get_source_value(record, column)
         output[column] = decode_sql_value(raw) if raw is not None else ""
 
     zipcode = normalize_zipcode(output.get("ZIPCODE"))
@@ -261,11 +281,11 @@ def transform_record(
     output["ZIPCODE_ORIGIN"] = (
         "null" if is_sql_null(zipcode_token or "") else (decode_sql_value(zipcode_token) if zipcode_token is not None else "")
     )
-    output["ADDRESS3_ORIGIN"] = decode_sql_value(address3_token) if address3_token is not None else ""
+    output["ADDRESS_3_ORIGIN"] = decode_sql_value(address3_token) if address3_token is not None else ""
     output["_ZIPCODE_TOKEN"] = None if is_sql_null(zipcode_token or "") else (zipcode_token.strip() if zipcode_token is not None else None)
     if zipcode is None:
         matched = None
-        address3 = output.get("ADDRESS3") or ""
+        address3 = output.get("ADDRESS_3") or ""
         if len(address3) >= 6:
             city_part = address3[:3]
             name_part = address3[3:6]
@@ -275,33 +295,39 @@ def transform_record(
                     break
         if matched:
             zip_code, area = matched
-            output["ADDRESS1"] = area["city"]
-            output["ADDRESS2"] = area["name"]
+            output["ADDRESS_1"] = area["city"]
+            output["ADDRESS_2"] = area["name"]
             output["ZIPCODE"] = zip_code
             output["_ZIPCODE_TOKEN"] = encode_sql_value(zip_code)
             output["ZIPCODE_ORIGIN"] = "null"
         else:
-            output["ADDRESS1"] = ""
-            output["ADDRESS2"] = ""
+            output["ADDRESS_1"] = ""
+            output["ADDRESS_2"] = ""
             output["ZIPCODE_ORIGIN"] = "null"
         output["COMENTS"] = "客戶資料無zipcode"
     else:
         area = zipcode_map.get(zipcode)
         if area is None:
-            output["ADDRESS1"] = ""
-            output["ADDRESS2"] = ""
+            output["ADDRESS_1"] = ""
+            output["ADDRESS_2"] = ""
             output["COMENTS"] = "客戶zipcode資料不存在zipcode.json"
             logger.write(
                 "WARN",
                 sequence,
                 statement,
-                f"zipcode {zipcode} not found in zipcode.json; ADDRESS1/ADDRESS2 blanked",
+                f"zipcode {zipcode} not found in zipcode.json; ADDRESS_1/ADDRESS_2 blanked",
             )
         else:
-            output["ADDRESS1"] = area["city"]
-            output["ADDRESS2"] = area["name"]
+            output["ADDRESS_1"] = area["city"]
+            output["ADDRESS_2"] = area["name"]
 
-    output["GENDER"] = transform_gender(output.get("GENDER"))
+    gender_value, gender_invalid = transform_gender(output.get("GENDER"))
+    output["GENDER"] = gender_value
+    if gender_invalid:
+        if output.get("COMENTS"):
+            output["COMENTS"] = f"{output['COMENTS']};客戶性別資料不正確"
+        else:
+            output["COMENTS"] = "客戶性別資料不正確"
     return output
 
 

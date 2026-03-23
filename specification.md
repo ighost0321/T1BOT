@@ -55,12 +55,12 @@
 
 轉換後每筆 SQL 的欄位順序固定如下：
 
-`ACCTNO,UID,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,ZIPCODE,ADDRESS1,ADDRESS2,ADDRESS3,AGREESALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER`
+`ACCTNO,UID,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,ZIPCODE,ADDRESS_1,ADDRESS_2,ADDRESS_3,AGREE_SALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER`
 
 轉換後每筆 SQL 的前綴固定為：
 
 ```sql
-INSERT INTO account_info (ACCTNO,UID,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,ZIPCODE,ADDRESS1,ADDRESS2,ADDRESS3,AGREESALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER)
+INSERT INTO account_info (ACCTNO,UID,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,ZIPCODE,ADDRESS_1,ADDRESS_2,ADDRESS_3,AGREE_SALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER)
 ```
 
 ## 7. SQL 轉換規則
@@ -90,7 +90,7 @@ INSERT INTO account_info (ACCTNO,UID,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTH
 
 CSV 欄位順序必須與下列欄位完全一致：
 
-`ACCTNO,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,ZIPCODE,ZIPCODE_ORIGIN,ADDRESS1,ADDRESS2,ADDRESS3,ADDRESS3_ORIGIN,AGREESALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER,COMENTS`
+`ACCTNO,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,ZIPCODE,ZIPCODE_ORIGIN,ADDRESS_1,ADDRESS_2,ADDRESS_3,ADDRESS_3_ORIGIN,AGREE_SALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER,COMENTS`
 
 ### 8.2 內容來源
 
@@ -104,40 +104,40 @@ CSV 欄位順序必須與下列欄位完全一致：
 - 若 `ZIPCODE` 為 SQL `null` 或 `NULL`，則：
   - 抓取ADDRESS3第一至第三字元與zipcode.json city比對和第四至第六字元與zipcode.json name比對：
   - TRUE:
-    - COPY city of zipcode.json to `ADDRESS1`
-    - COPY name of zipcode.json to `ADDRESS2`
+    - COPY city of zipcode.json to `ADDRESS_1`
+    - COPY name of zipcode.json to `ADDRESS_2`
     - COPY zipCode of zipcode.json to `ZIPCODE`
     - COPY `null` to `ZIPCODE_ORGIN`
   - FALSE:
-    - `ADDRESS1` 設為空字串 `''`
-    - `ADDRESS2` 設為空字串 `''`
+    - `ADDRESS_1` 設為空字串 `''`
+    - `ADDRESS_2` 設為空字串 `''`
     - COPY `null` to `ZIPCODE_ORGIN`
-  - COPY `ADDRESS3` to `ADDRESS3_ORGIN`
+  - COPY `ADDRESS3` to `ADDRESS_3_ORGIN`
   - CSV COMENTS欄位新增文字"客戶資料無zipcode"
 
 ### 9.2 ZIPCODE 不為 null
 
 - 若 `ZIPCODE` 不為 `null`，需以其值對照 `zipcode.json` 中的 `zipCode`
 - 若成功找到對應資料：
-  - 將 `city` 複製到 `ADDRESS1`
-  - 將 `name` 複製到 `ADDRESS2`
+  - 將 `city` 複製到 `ADDRESS_1`
+  - 將 `name` 複製到 `ADDRESS_2`
       
 
 ### 9.3 ZIPCODE 查無對應
 
 - 若 `ZIPCODE` 不為 `null`，但在 `zipcode.json` 中找不到對應：
   - 保留 `ZIPCODE` 原值
-  - `ADDRESS1` 設為空字串 `''`
-  - `ADDRESS2` 設為空字串 `''`
+  - `ADDRESS_1` 設為空字串 `''`
+  - `ADDRESS_2` 設為空字串 `''`
   - 該筆需寫入 log，但仍視為可輸出資料
   - CSV COMENTS欄位新增文字"客戶zipcode資料不存在zipcode.json"
 
 ## 10. GENDER 轉換規則
 
 - `GENDER` 比對採大小寫不敏感
-- 若 `GENDER` 為 `M` 或 `m`，轉為 `'0'`
-- 其餘所有值均轉為 `'1'`
-- 包含 `F`、空字串、`null`、其他非預期值，皆轉為 `'1'`
+- 若 `GENDER` 為 `M` 或 `m`，轉為 `'1'`
+- `F`、空字串、`null`、其他非預期值，皆轉為 `'0'`
+- 非上述2個字元轉為`'9'`並CSV COMENTS欄位新增文字"客戶性別資料不正確"
 
 ## 11. null 與值判定規則
 
