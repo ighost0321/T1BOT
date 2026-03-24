@@ -109,6 +109,7 @@ CSV 欄位順序必須與下列欄位完全一致：
     - COPY zipCode of zipcode.json to `ZIPCODE`
     - COPY `null` to `ZIPCODE_ORGIN`
   - FALSE:
+    - copy '' to  `ZIPCODE`
     - `ADDRESS_1` 設為空字串 `''`
     - `ADDRESS_2` 設為空字串 `''`
     - COPY `null` to `ZIPCODE_ORGIN`

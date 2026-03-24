@@ -301,6 +301,8 @@ def transform_record(
             output["_ZIPCODE_TOKEN"] = encode_sql_value(zip_code)
             output["ZIPCODE_ORIGIN"] = "null"
         else:
+            output["ZIPCODE"] = ""
+            output["_ZIPCODE_TOKEN"] = encode_sql_value("")
             output["ADDRESS_1"] = ""
             output["ADDRESS_2"] = ""
             output["ZIPCODE_ORIGIN"] = "null"
