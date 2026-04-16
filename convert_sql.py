@@ -63,6 +63,8 @@ INSERT_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+TRIM_CHARS = " \t\r\n\u3000"
+
 
 class ProcessingError(Exception):
     pass
@@ -122,8 +124,8 @@ def load_zipcode_map(path: Path) -> Dict[str, Dict[str, str]]:
         if not zip_code:
             continue
         result[zip_code] = {
-            "city": str(item.get("city", "")),
-            "name": str(item.get("name", "")),
+            "city": trim_text(str(item.get("city", ""))),
+            "name": trim_text(str(item.get("name", ""))),
         }
     return result
 
@@ -199,12 +201,16 @@ def is_sql_null(token: str) -> bool:
     return token.strip().lower() == "null"
 
 
+def trim_text(value: str) -> str:
+    return value.strip(TRIM_CHARS)
+
+
 def decode_sql_value(token: str) -> Optional[str]:
     token = token.strip()
     if is_sql_null(token):
         return None
     if len(token) >= 2 and token[0] == "'" and token[-1] == "'":
-        return token[1:-1].replace("''", "'")
+        return trim_text(token[1:-1].replace("''", "'"))
     return token
 
 
@@ -219,7 +225,18 @@ def encode_sql_value(value: Optional[str], quoted: bool = True) -> str:
 def normalize_zipcode(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
-    return value.strip()
+    return trim_text(value)
+
+
+def normalize_sql_token_for_text(token: Optional[str]) -> Optional[str]:
+    if token is None:
+        return None
+    raw = token.strip()
+    if is_sql_null(raw):
+        return None
+    if len(raw) >= 2 and raw[0] == "'" and raw[-1] == "'":
+        return encode_sql_value(trim_text(raw[1:-1].replace("''", "'")))
+    return raw
 
 
 def transform_gender(value: Optional[str]) -> Tuple[str, bool]:
@@ -282,7 +299,7 @@ def transform_record(
         "null" if is_sql_null(zipcode_token or "") else (decode_sql_value(zipcode_token) if zipcode_token is not None else "")
     )
     output["ADDRESS_3_ORIGIN"] = decode_sql_value(address3_token) if address3_token is not None else ""
-    output["_ZIPCODE_TOKEN"] = None if is_sql_null(zipcode_token or "") else (zipcode_token.strip() if zipcode_token is not None else None)
+    output["_ZIPCODE_TOKEN"] = normalize_sql_token_for_text(zipcode_token)
     if zipcode is None:
         matched = None
         address3 = output.get("ADDRESS_3") or ""
