@@ -1,0 +1,6 @@
+{
+  "sql_file": "sql.txt",
+  "zipcode_file": "zipcode.json",
+  "output_dir": ".",
+  "table_name": "account_info_temp"
+}

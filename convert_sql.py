@@ -19,8 +19,6 @@ SQL_OUTPUT_COLUMNS = [
     "EMAIL",
     "MOBILE",
     "ZIPCODE",
-    "ADDRESS_1",
-    "ADDRESS_2",
     "ADDRESS_3",
     "AGREE_SALES",
     "ACCT_STATE",
@@ -40,8 +38,6 @@ CSV_OUTPUT_COLUMNS = [
     "MOBILE",
     "ZIPCODE",
     "ZIPCODE_ORIGIN",
-    "ADDRESS_1",
-    "ADDRESS_2",
     "ADDRESS_3",
     "ADDRESS_3_ORIGIN",
     "AGREE_SALES",
@@ -51,12 +47,6 @@ CSV_OUTPUT_COLUMNS = [
     "GENDER",
     "COMENTS",
 ]
-
-INSERT_PREFIX = (
-    "INSERT INTO account_info "
-    "(ACCTNO,UID,PWDHASHCODE,FORCEUPD,LOCKNUM,USERNAME,BIRTHDATE,EMAIL,MOBILE,"
-    "ZIPCODE,ADDRESS_1,ADDRESS_2,ADDRESS_3,AGREE_SALES,ACCT_STATE,CRT_DATE,UPD_DATE,GENDER)"
-)
 
 INSERT_PATTERN = re.compile(
     r"^\s*insert\s+into\s+([^\s(]+)\s*\((.*?)\)\s*values\s*\((.*)\)\s*$",
@@ -90,8 +80,6 @@ class Logger:
 
 
 ALIASES = {
-    "ADDRESS_1": ["ADDRESS_1", "ADDRESS1"],
-    "ADDRESS_2": ["ADDRESS_2", "ADDRESS2"],
     "ADDRESS_3": ["ADDRESS_3", "ADDRESS3"],
     "AGREE_SALES": ["AGREE_SALES", "AGREESALES"],
 }
@@ -107,12 +95,45 @@ def get_source_value(record: Dict[str, str], column: str) -> Optional[str]:
 def read_text_with_fallback(path: Path) -> Tuple[str, str]:
     raw = path.read_bytes()
     errors = []
-    for encoding in ("big5", "utf-8", "utf-8-sig"):
+    # `cp950` is the common Traditional Chinese Windows code page and covers
+    # bytes that strict `big5` decoder may reject.
+    for encoding in ("big5", "cp950", "utf-8", "utf-8-sig"):
         try:
             return raw.decode(encoding), encoding
         except UnicodeDecodeError as exc:
             errors.append(f"{encoding}: {exc}")
-    raise ProcessingError(f"unable to decode {path.name}; " + "; ".join(errors))
+    # Last resort: decode with cp950 and replace any unrecognised bytes with
+    # the Unicode replacement character (U+FFFD).  This keeps the batch
+    # running when the file contains a handful of rogue bytes while the rest
+    # of the content is valid CP950 / Big5.
+    fallback_encoding = "cp950"
+    text = raw.decode(fallback_encoding, errors="replace")
+    return text, f"{fallback_encoding}+replace"
+
+
+def load_config(path: Path) -> dict:
+    """Load and validate config.json.
+
+    Required keys:
+      sql_file     – path to the input SQL file
+      zipcode_file – path to zipcode.json
+      output_dir   – directory for output files
+      table_name   – table name used in INSERT INTO
+    """
+    try:
+        text, _ = read_text_with_fallback(path)
+        data = json.loads(text)
+    except Exception as exc:
+        print(f"無法讀取設定檔 {path.name}: {exc}")
+        sys.exit(1)
+
+    required_keys = ["sql_file", "zipcode_file", "output_dir", "table_name"]
+    missing = [k for k in required_keys if k not in data]
+    if missing:
+        print(f"設定檔缺少必要欄位: {', '.join(missing)}")
+        sys.exit(1)
+
+    return data
 
 
 def load_zipcode_map(path: Path) -> Dict[str, Dict[str, str]]:
@@ -285,8 +306,6 @@ def transform_record(
 
     output = {column: "" for column in CSV_OUTPUT_COLUMNS}
     for column in SQL_OUTPUT_COLUMNS:
-        if column in ("ADDRESS_1", "ADDRESS_2"):
-            continue
         if column == "UID":
             output[column] = "newID()"
             continue
@@ -311,34 +330,24 @@ def transform_record(
                     matched = (zip_code, area)
                     break
         if matched:
-            zip_code, area = matched
-            output["ADDRESS_1"] = area["city"]
-            output["ADDRESS_2"] = area["name"]
+            zip_code, _ = matched
             output["ZIPCODE"] = zip_code
             output["_ZIPCODE_TOKEN"] = encode_sql_value(zip_code)
             output["ZIPCODE_ORIGIN"] = "null"
         else:
             output["ZIPCODE"] = ""
             output["_ZIPCODE_TOKEN"] = encode_sql_value("")
-            output["ADDRESS_1"] = ""
-            output["ADDRESS_2"] = ""
             output["ZIPCODE_ORIGIN"] = "null"
         output["COMENTS"] = "客戶資料無zipcode"
     else:
-        area = zipcode_map.get(zipcode)
-        if area is None:
-            output["ADDRESS_1"] = ""
-            output["ADDRESS_2"] = ""
+        if zipcode not in zipcode_map:
             output["COMENTS"] = "客戶zipcode資料不存在zipcode.json"
             logger.write(
                 "WARN",
                 sequence,
                 statement,
-                f"zipcode {zipcode} not found in zipcode.json; ADDRESS_1/ADDRESS_2 blanked",
+                f"zipcode {zipcode} not found in zipcode.json",
             )
-        else:
-            output["ADDRESS_1"] = area["city"]
-            output["ADDRESS_2"] = area["name"]
 
     gender_value, gender_invalid = transform_gender(output.get("GENDER"))
     output["GENDER"] = gender_value
@@ -350,7 +359,7 @@ def transform_record(
     return output
 
 
-def build_sql_line(record: Dict[str, Optional[str]]) -> str:
+def build_sql_line(record: Dict[str, Optional[str]], insert_prefix: str) -> str:
     tokens = []
     for column in SQL_OUTPUT_COLUMNS:
         value = record.get(column)
@@ -363,7 +372,7 @@ def build_sql_line(record: Dict[str, Optional[str]]) -> str:
             tokens.append("null" if zipcode_token is None else zipcode_token)
         else:
             tokens.append(encode_sql_value(value))
-    return f"{INSERT_PREFIX} VALUES ({','.join(tokens)});"
+    return f"{insert_prefix} VALUES ({','.join(tokens)});"
 
 
 def write_big5_lines(path: Path, lines: List[str]) -> None:
@@ -380,7 +389,14 @@ def write_big5_csv(path: Path, rows: List[Dict[str, Optional[str]]]) -> None:
             writer.writerow(["" if row[column] is None else row[column] for column in CSV_OUTPUT_COLUMNS])
 
 
-def process(sql_path: Path, zipcode_path: Path, output_dir: Path) -> int:
+def process(config: dict) -> int:
+    insert_prefix = (
+        f"INSERT INTO {config['table_name']} ({','.join(SQL_OUTPUT_COLUMNS)})"
+    )
+    sql_path = Path(config["sql_file"])
+    zipcode_path = Path(config["zipcode_file"])
+    output_dir = Path(config["output_dir"])
+
     now = datetime.now()
     log_path = output_dir / f"log_{now.strftime('%Y%m%d')}.txt"
     logger = Logger(log_path)
@@ -394,10 +410,10 @@ def process(sql_path: Path, zipcode_path: Path, output_dir: Path) -> int:
     try:
         sql_text, sql_encoding = read_text_with_fallback(sql_path)
     except Exception as exc:
-        logger.write("ERROR", None, "", f"failed to read sql.txt: {exc}")
+        logger.write("ERROR", None, "", f"failed to read {sql_path.name}: {exc}")
         return 1
 
-    logger.write("WARN", None, "", f"sql.txt decoded with {sql_encoding}")
+    logger.write("WARN", None, "", f"{sql_path.name} decoded with {sql_encoding}")
 
     statements = split_sql_statements(sql_text)
     if not statements:
@@ -410,9 +426,7 @@ def process(sql_path: Path, zipcode_path: Path, output_dir: Path) -> int:
         try:
             columns, values = parse_insert_statement(statement)
             record = transform_record(columns, values, zipcode_map, logger, sequence, statement)
-            if record is None:
-                continue
-            sql_line = build_sql_line(record)
+            sql_line = build_sql_line(record, insert_prefix)
 
             # Validate Big5 encoding per record so one bad row does not stop the batch.
             sql_line.encode("big5")
@@ -452,11 +466,10 @@ def process(sql_path: Path, zipcode_path: Path, output_dir: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Convert SQL file into normalized SQL and CSV outputs.")
-    parser.add_argument("--sql", default="sql.txt", help="Path to input SQL file")
-    parser.add_argument("--zipcode", default="zipcode.json", help="Path to zipcode mapping JSON")
-    parser.add_argument("--outdir", default=".", help="Output directory")
+    parser.add_argument("--config", default="config.json", help="Path to config JSON file")
     args = parser.parse_args()
-    return process(Path(args.sql), Path(args.zipcode), Path(args.outdir))
+    config = load_config(Path(args.config))
+    return process(config)
 
 
 if __name__ == "__main__":
