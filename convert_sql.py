@@ -19,6 +19,8 @@ SQL_OUTPUT_COLUMNS = [
     "EMAIL",
     "MOBILE",
     "ZIPCODE",
+    "ADDRESS_1",
+    "ADDRESS_2",
     "ADDRESS_3",
     "AGREE_SALES",
     "ACCT_STATE",
@@ -38,6 +40,8 @@ CSV_OUTPUT_COLUMNS = [
     "MOBILE",
     "ZIPCODE",
     "ZIPCODE_ORIGIN",
+    "ADDRESS_1",
+    "ADDRESS_2",
     "ADDRESS_3",
     "ADDRESS_3_ORIGIN",
     "AGREE_SALES",
@@ -80,6 +84,8 @@ class Logger:
 
 
 ALIASES = {
+    "ADDRESS_1": ["ADDRESS_1", "ADDRESS1"],
+    "ADDRESS_2": ["ADDRESS_2", "ADDRESS2"],
     "ADDRESS_3": ["ADDRESS_3", "ADDRESS3"],
     "AGREE_SALES": ["AGREE_SALES", "AGREESALES"],
 }
@@ -226,6 +232,19 @@ def trim_text(value: str) -> str:
     return value.strip(TRIM_CHARS)
 
 
+def find_non_big5_columns(record: Dict[str, Optional[str]], columns: List[str]) -> List[str]:
+    """回傳 columns 中值無法編碼為 Big5 的欄位名稱清單。"""
+    bad = []
+    for col in columns:
+        val = record.get(col)
+        if val and isinstance(val, str):
+            try:
+                val.encode("big5")
+            except UnicodeEncodeError:
+                bad.append(col)
+    return bad
+
+
 def decode_sql_value(token: str) -> Optional[str]:
     token = token.strip()
     if is_sql_null(token):
@@ -261,14 +280,14 @@ def normalize_sql_token_for_text(token: Optional[str]) -> Optional[str]:
 
 
 def transform_gender(value: Optional[str]) -> Tuple[str, bool]:
-    if value is None:
-        return "0", False
-    text = value.strip().upper()
-    if text == "M":
-        return "1", False
-    if text == "F" or text == "":
-        return "0", False
-    return "9", True
+    if value is not None:
+        text = value.strip().upper()
+        if text == "M":
+            return "1", False
+        if text == "F":
+            return "0", False
+    # null、空白、或其他非預期值 → 空字串並標記異常
+    return "", True
 
 
 def transform_record(
@@ -306,11 +325,18 @@ def transform_record(
 
     output = {column: "" for column in CSV_OUTPUT_COLUMNS}
     for column in SQL_OUTPUT_COLUMNS:
+        if column in ("ADDRESS_1", "ADDRESS_2"):
+            continue
         if column == "UID":
             output[column] = "newID()"
             continue
         raw = get_source_value(record, column)
         output[column] = decode_sql_value(raw) if raw is not None else ""
+
+    # 明確 TRIM 指定欄位（含全形空白）
+    for col in ("ACCTNO", "USERNAME", "ADDRESS_3"):
+        if output.get(col):
+            output[col] = trim_text(output[col])
 
     zipcode = normalize_zipcode(output.get("ZIPCODE"))
     output["ZIPCODE"] = zipcode
@@ -319,28 +345,17 @@ def transform_record(
     )
     output["ADDRESS_3_ORIGIN"] = decode_sql_value(address3_token) if address3_token is not None else ""
     output["_ZIPCODE_TOKEN"] = normalize_sql_token_for_text(zipcode_token)
-    if zipcode is None:
-        matched = None
-        address3 = output.get("ADDRESS_3") or ""
-        if len(address3) >= 6:
-            city_part = address3[:3]
-            name_part = address3[3:6]
-            for zip_code, area in zipcode_map.items():
-                if area.get("city") == city_part and area.get("name") == name_part:
-                    matched = (zip_code, area)
-                    break
-        if matched:
-            zip_code, _ = matched
-            output["ZIPCODE"] = zip_code
-            output["_ZIPCODE_TOKEN"] = encode_sql_value(zip_code)
-            output["ZIPCODE_ORIGIN"] = "null"
-        else:
-            output["ZIPCODE"] = ""
-            output["_ZIPCODE_TOKEN"] = encode_sql_value("")
-            output["ZIPCODE_ORIGIN"] = "null"
+    if not zipcode:  # null 或空白皆視為無 ZIPCODE
+        output["ZIPCODE"] = ""
+        output["_ZIPCODE_TOKEN"] = encode_sql_value("")
+        output["ADDRESS_1"] = ""
+        output["ADDRESS_2"] = ""
         output["COMENTS"] = "客戶資料無zipcode"
     else:
-        if zipcode not in zipcode_map:
+        area = zipcode_map.get(zipcode)
+        if area is None:
+            output["ADDRESS_1"] = ""
+            output["ADDRESS_2"] = ""
             output["COMENTS"] = "客戶zipcode資料不存在zipcode.json"
             logger.write(
                 "WARN",
@@ -348,14 +363,17 @@ def transform_record(
                 statement,
                 f"zipcode {zipcode} not found in zipcode.json",
             )
+        else:
+            output["ADDRESS_1"] = area["city"]
+            output["ADDRESS_2"] = area["name"]
 
     gender_value, gender_invalid = transform_gender(output.get("GENDER"))
     output["GENDER"] = gender_value
     if gender_invalid:
         if output.get("COMENTS"):
-            output["COMENTS"] = f"{output['COMENTS']};客戶性別資料不正確"
+            output["COMENTS"] = f"{output['COMENTS']};GENDER欄位不正確"
         else:
-            output["COMENTS"] = "客戶性別資料不正確"
+            output["COMENTS"] = "GENDER欄位不正確"
     return output
 
 
@@ -382,7 +400,7 @@ def write_big5_lines(path: Path, lines: List[str]) -> None:
 
 
 def write_big5_csv(path: Path, rows: List[Dict[str, Optional[str]]]) -> None:
-    with path.open("w", encoding="big5", newline="") as fh:
+    with path.open("w", encoding="big5", errors="replace", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow(CSV_OUTPUT_COLUMNS)
         for row in rows:
@@ -428,11 +446,24 @@ def process(config: dict) -> int:
             record = transform_record(columns, values, zipcode_map, logger, sequence, statement)
             sql_line = build_sql_line(record, insert_prefix)
 
-            # Validate Big5 encoding per record so one bad row does not stop the batch.
-            sql_line.encode("big5")
-            # Pre-build CSV row for validation
+            # 嘗試將 SQL 輸出行編碼為 Big5
+            try:
+                sql_line.encode("big5")
+            except UnicodeEncodeError:
+                # 找出哪些欄位含有無法轉換 Big5 的特殊字元
+                bad_fields = find_non_big5_columns(record, SQL_OUTPUT_COLUMNS)
+                note = "；".join(f"{col}欄位含特殊字元無法轉換" for col in bad_fields) or "含特殊字元無法轉換"
+                existing = record.get("COMENTS") or ""
+                record["COMENTS"] = f"{existing};{note}" if existing else note
+                # 跳過 SQL、仍寫入 CSV（保留原始欄位值供人工檢視）
+                csv_rows.append(record)
+                logger.write("WARN", sequence, statement,
+                             f"SQL skipped: non-Big5 characters in {', '.join(bad_fields)}")
+                continue
+
+            # 正常流程：驗證 CSV 編碼
             csv_row = ["" if record[column] is None else record[column] for column in CSV_OUTPUT_COLUMNS]
-            ",".join(csv_row).encode("big5")  # Quick Big5 validation without CSV writer overhead
+            ",".join(csv_row).encode("big5")
 
             sql_lines.append(sql_line + "\n")
             csv_rows.append(record)
